@@ -4,13 +4,15 @@
 
 use crate::{RadioRx, RadioTx};
 use failure::Error;
+use float_ord::FloatOrd;
 use num::{Complex, Zero};
-use rand::{distributions::Distribution, Rng};
+use rand::{distributions::Distribution, rngs::ThreadRng, Rng};
 use rand_distr::Normal;
 use std::collections::VecDeque;
 use std::f32::consts::PI;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
+#[derive(Clone)]
 pub struct RadioSimulatorConfig {
     /// To simulate the fact that the Tx and Rx start producing samples at different times, the Rx
     /// will produce N pure noise values before including signal from the Tx. Here, N is sampled
@@ -100,8 +102,9 @@ impl<R: Rng> SimulatedRadioRx<R> {
             let mut samp = self.receiver.recv()?;
 
             // Record past samples
-            assert!(self.max_multipath * self.config.samp_rate < 1e6); // Keep it sane!
-            let max_past_samples = (self.max_multipath * self.config.samp_rate).ceil() as usize;
+            assert!((self.max_multipath * self.config.samp_rate as f32) < 1e6); // Keep it sane!
+            let max_past_samples =
+                (self.max_multipath * self.config.samp_rate as f32).ceil() as usize;
             self.past_samps.push_front(samp);
             while self.past_samps.len() >= max_past_samples {
                 self.past_samps.pop_back();
@@ -112,12 +115,12 @@ impl<R: Rng> SimulatedRadioRx<R> {
                 let i = (d * self.cur_freq).round() as usize;
                 // Phase factor that accumulates assuming that radio travelled for d * (speed of
                 // light) distance
-                //let dist_phase = Complex::new(0., );
+                let dist_phase = Complex::new(0., -2. * PI * self.cur_freq * d).exp();
 
                 // `self.past_samps` may be too short if it hasn't accumulated samples from the
                 // start yet or `self.freq` increased recently
                 if i < self.past_samps.len() {
-                    samp += attn * self.past_samps[i];
+                    samp += attn * dist_phase * self.past_samps[i];
                 }
             }
 
@@ -170,27 +173,26 @@ impl RadioTx for SimulatedRadioTx {
     }
 }
 
-use float_ord::FloatOrd;
-
 pub fn create_simulator(
     config: &RadioSimulatorConfig,
-) -> (SimulatedRadioTx, SimulatedRadioRx<rand::ThreadRng>) {
+) -> (SimulatedRadioTx, SimulatedRadioRx<ThreadRng>) {
     let (sender, receiver) = channel();
-    let rng = rand::thread_rng();
+    let mut rng = rand::thread_rng();
     let max_multipath = config
         .multipath
         .iter()
-        .map(|x| x.0.into::<FloatOrd>())
+        .map(|x| FloatOrd(x.0))
         .max()
-        .into::<f32>();
+        .unwrap_or(FloatOrd(0.))
+        .0;
 
     let rx = SimulatedRadioRx {
         config: config.clone(),
         rng,
         receiver,
-        cur_cfo: 2. * rng.gen() * config.max_cfo - config.max_cfo,
-        cum_phase_offset: Complex::from_polar(&1., &(rng.gen() * 2. * PI)),
-        samps_before_start: rng.gen() % config.max_start_time_offset,
+        cur_cfo: Complex::from_polar(&1., &(2. * rng.gen::<f32>() * config.max_cfo - config.max_cfo)),
+        cum_phase_offset: Complex::from_polar(&1., &(rng.gen::<f32>() * 2. * PI)),
+        samps_before_start: rng.gen::<u64>() % config.max_start_time_offset,
         tot_num_samps: 0,
         cur_freq: config.start_freq,
         max_multipath,

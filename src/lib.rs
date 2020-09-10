@@ -1,10 +1,10 @@
+mod simulator;
 #[cfg(feature = "rpi")]
 mod usrp;
-mod simulator;
 
+pub use simulator::{create_simulator, RadioSimulatorConfig, SimulatedRadioRx, SimulatedRadioTx};
 #[cfg(feature = "rpi")]
 pub use usrp::{new_rx_usrp, new_tx_usrp, ClockSource, UsrpRxSingleStream, UsrpTxSingleStream};
-pub use simulator::{RadioSimulatorConfig, SimulatedRadioRx};
 
 use failure::Error;
 use num::complex::Complex;
